@@ -209,13 +209,29 @@ func getChequeItems(table *html.Node) ([]chequeItem, error) {
 
 	tr := table.FirstChild.FirstChild
 
-	for {
+	for i := 0; ; i++ {
 		if tr == nil {
 			break
 		}
+		//fmt.Printf("NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(tr.Type), tr.Data, tr.Attr, i)
+		if i > 200 {
+			return nil, fmt.Errorf("got stuck in infinite loop when getting cheque items")
+		}
+		//sometimes there are empty textNodes instead of trs because of Go's broken html parsing
+		if tr.FirstChild == nil {
+			tr = tr.NextSibling
+			continue
+		}
 
 		td := tr.FirstChild.NextSibling
-		//fmt.Printf("NodeType=%s Data=%s Attrs=%s\n", nodeTypeAsString(td.Type), td.Data, td.Attr)
+
+		//sometimes there are rows with just 1 td title, usually related to alcohol or specialized items
+		//they have a product code, it is not useful
+		if td == nil {
+			tr = tr.NextSibling
+			continue
+		}
+		//fmt.Printf("NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(td.Type), td.Data, td.Attr, i)
 		var currLineItem chequeItem
 
 		if td.Type == html.ElementNode && len(td.Attr) > 0 && strings.Contains(td.Attr[0].Val, "no-break") {
