@@ -3,6 +3,7 @@ package bot
 import (
 	"fmt"
 	"github.com/bwmarrin/discordgo"
+	silpo "leprechaun/Parsers"
 	"log"
 	"os"
 	"os/signal"
@@ -54,6 +55,14 @@ func newMessage(discord *discordgo.Session, message *discordgo.MessageCreate) {
 		discord.ChannelMessageSend(message.ChannelID, "Hello World😃")
 	case strings.Contains(message.Content, "!bye"):
 		discord.ChannelMessageSend(message.ChannelID, "Good Bye👋")
+	case strings.Contains(message.Content, "!parseSilpo"):
+		discord.ChannelMessageSend(message.ChannelID, "Parsing")
+		res, err := silpo.ParseLink(strings.Replace(message.Content, "!parseSilpo ", "", 1))
+		if err != nil {
+			discord.ChannelMessageSend(message.ChannelID, err.Error())
+		} else {
+			discord.ChannelMessageSend(message.ChannelID, res)
+		}
 		// add more cases if required
 	}
 
