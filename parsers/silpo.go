@@ -49,7 +49,7 @@ func submitGoogleForm(items []chequeItem, t time.Time) (string, error) {
 				os.Getenv("G_FORM_TITLE_ENTRY"):     {item.Title},
 				os.Getenv("G_FORM_PRICE_ENTRY"):     {fmt.Sprintf("%.2f", item.Price)},
 				os.Getenv("G_FORM_CATEGORY_ENTRY"):  {os.Getenv("G_FORM_CATEGORY_D_VALUE")},
-				os.Getenv("G_FORM_TIMESTAMP_ENTRY"): {t.Format("02/01/2006 15:04:05")},
+				os.Getenv("G_FORM_TIMESTAMP_ENTRY"): {t.Format("01/02/2006 15:04:05")},
 			})
 
 		if err != nil {
