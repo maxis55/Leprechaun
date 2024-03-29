@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/joho/godotenv"
-	bot "leprechaun/Bot"
+	"leprechaun/bot"
 	"log"
 	"os"
 )

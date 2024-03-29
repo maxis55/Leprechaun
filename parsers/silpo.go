@@ -1,29 +1,26 @@
-package silpo
+package parsers
 
 import (
 	"fmt"
 	"golang.org/x/net/html"
-	"io"
-	"net/http"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type chequeItem struct {
-	Title string
-	Price float32
+	Title    string
+	Price    float32
+	Category string
 }
 
-func ParseLink(url string) (result string, err error) {
+func ParseSilpoLink(url string) (result string, err error) {
 	body, err := getHtml(url)
 	if err != nil {
 		return "", fmt.Errorf("HTTP error: %v", err)
 	}
 
-	items, t, err := parseHtml(body)
+	items, t, err := parseSilpoChequeHtml(body)
 
 	if err != nil {
 		return "", fmt.Errorf("parsing error: %v", err)
@@ -38,54 +35,7 @@ func ParseLink(url string) (result string, err error) {
 	return res, nil
 }
 
-func submitGoogleForm(items []chequeItem, t time.Time) (string, error) {
-	var sum float32
-	for _, item := range items {
-		//dont overwhelm google
-		time.Sleep(100 * time.Millisecond)
-
-		resp, err := http.PostForm(os.Getenv("G_FORM_LINK"),
-			url.Values{
-				os.Getenv("G_FORM_TITLE_ENTRY"):     {item.Title},
-				os.Getenv("G_FORM_PRICE_ENTRY"):     {fmt.Sprintf("%.2f", item.Price)},
-				os.Getenv("G_FORM_CATEGORY_ENTRY"):  {os.Getenv("G_FORM_CATEGORY_D_VALUE")},
-				os.Getenv("G_FORM_TIMESTAMP_ENTRY"): {t.Format("01/02/2006 15:04:05")},
-			})
-
-		if err != nil {
-			return "", fmt.Errorf("error making google http request: %v", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("POST status error: %v", resp.StatusCode)
-		}
-
-		sum += item.Price
-	}
-
-	return fmt.Sprintf("Submitted %d items, total cost is %.2f, timestamp is %s\n", len(items), sum, t.Format("02/01/2006 15:04:05")), nil
-}
-
-func getHtml(url string) (result string, error error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("GET error: %v", err)
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET status error: %v", resp.StatusCode)
-	}
-
-	bytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read body: %v", err)
-	}
-
-	return string(bytes), nil
-}
-
-func parseHtml(htm string) ([]chequeItem, time.Time, error) {
+func parseSilpoChequeHtml(htm string) ([]chequeItem, time.Time, error) {
 
 	t, _ := html.Parse(strings.NewReader(htm))
 	//t := html.NewTokenizer(strings.NewReader(htm))
@@ -163,7 +113,7 @@ func parseHtml(htm string) ([]chequeItem, time.Time, error) {
 		//fmt.Printf("NodeType=%s Data=%s Attrs=%s\n", nodeTypeAsString(n.Type), n.Data, n.Attr)
 		if n.Type == html.ElementNode && n.Data == "table" && len(n.Attr) > 0 && n.Attr[0].Val == "cheque-goods" {
 			var err error
-			chequeItems, err = getChequeItems(n)
+			chequeItems, err = getSilpoChequeItems(n)
 
 			if err != nil {
 				return fmt.Errorf("getting cheque items error: %v", err)
@@ -204,7 +154,7 @@ func parseHtml(htm string) ([]chequeItem, time.Time, error) {
 
 }
 
-func getChequeItems(table *html.Node) ([]chequeItem, error) {
+func getSilpoChequeItems(table *html.Node) ([]chequeItem, error) {
 	var lineItems []chequeItem
 
 	tr := table.FirstChild.FirstChild
@@ -265,24 +215,6 @@ func getChequeItems(table *html.Node) ([]chequeItem, error) {
 		tr = tr.NextSibling
 	}
 	return lineItems, nil
-}
-
-func nodeTypeAsString(nodeType html.NodeType) string {
-	switch nodeType {
-	case html.ErrorNode:
-		return "ErrorNode"
-	case html.TextNode:
-		return "TextNode"
-	case html.DocumentNode:
-		return "DocumentNode"
-	case html.ElementNode:
-		return "ElementNode"
-	case html.CommentNode:
-		return "CommentNode"
-	case html.DoctypeNode:
-		return "DoctypeNode"
-	}
-	return "UNKNOWN"
 }
 
 //reference cheque
