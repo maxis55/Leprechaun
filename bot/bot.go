@@ -55,15 +55,16 @@ func newMessage(discord *discordgo.Session, message *discordgo.MessageCreate) {
 		discord.ChannelMessageSend(message.ChannelID, "Hello World😃")
 	case strings.Contains(message.Content, "!bye"):
 		discord.ChannelMessageSend(message.ChannelID, "Good Bye👋")
-	case strings.Contains(message.Content, "!parseSilpo"):
+	case strings.Contains(message.Content, "receipt.silpo"):
 		discord.ChannelMessageSend(message.ChannelID, "Parsing")
-		res, err := parsers.ParseSilpoLink(strings.Replace(message.Content, "!parseSilpo ", "", 1))
-		if err != nil {
-			discord.ChannelMessageSend(message.ChannelID, err.Error())
-		} else {
-			discord.ChannelMessageSend(message.ChannelID, res)
-		}
-		// add more cases if required
+		go func() {
+			res, err := parsers.ParseSilpoLink(strings.Replace(message.Content, "!parseSilpo ", "", 1))
+			if err != nil {
+				discord.ChannelMessageSend(message.ChannelID, err.Error())
+			} else {
+				discord.ChannelMessageSend(message.ChannelID, res)
+			}
+		}()
 	}
 
 }
