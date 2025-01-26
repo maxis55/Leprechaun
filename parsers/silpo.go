@@ -8,38 +8,17 @@ import (
 	"time"
 )
 
-type chequeItem struct {
+type ChequeItem struct {
 	Title    string
 	Price    float32
 	Category string
 }
 
-func ParseSilpoLink(url string) (result string, err error) {
-	body, err := getHtml(url)
-	if err != nil {
-		return "", fmt.Errorf("HTTP error: %v", err)
-	}
-
-	items, t, err := parseSilpoChequeHtml(body)
-
-	if err != nil {
-		return "", fmt.Errorf("parsing error: %v", err)
-	}
-
-	res, err := submitGoogleForm(items, t)
-
-	if err != nil {
-		return "", fmt.Errorf("google form error: %v", err)
-	}
-
-	return res, nil
-}
-
-func parseSilpoChequeHtml(htm string) ([]chequeItem, time.Time, error) {
+func ParseSilpoChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 
 	t, _ := html.Parse(strings.NewReader(htm))
 	//t := html.NewTokenizer(strings.NewReader(htm))
-	////var lineItems []chequeItem
+	////var lineItems []ChequeItem
 	//
 	//for {
 	//	tokenType := t.Next()
@@ -99,13 +78,13 @@ func parseSilpoChequeHtml(htm string) ([]chequeItem, time.Time, error) {
 	//// Step deeper
 	//node = node.FirstChild
 	//fmt.Printf("NodeType=%s Data=%s\n", nodeTypeAsString(node.Type), node.Data)
-	var chequeItems []chequeItem
+	var chequeItems []ChequeItem
 	var dateTime time.Time
 
 	var processChequeGoods func(*html.Node) error
 	processChequeGoods = func(n *html.Node) error {
 		//by the time we've found dateTime
-		//we should've already found chequeItem
+		//we should've already found ChequeItem
 		//don't care about anything else
 		if !dateTime.IsZero() {
 			return nil
@@ -154,8 +133,8 @@ func parseSilpoChequeHtml(htm string) ([]chequeItem, time.Time, error) {
 
 }
 
-func getSilpoChequeItems(table *html.Node) ([]chequeItem, error) {
-	var lineItems []chequeItem
+func getSilpoChequeItems(table *html.Node) ([]ChequeItem, error) {
+	var lineItems []ChequeItem
 
 	tr := table.FirstChild.FirstChild
 
@@ -182,7 +161,7 @@ func getSilpoChequeItems(table *html.Node) ([]chequeItem, error) {
 			continue
 		}
 		//fmt.Printf("NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(td.Type), td.Data, td.Attr, i)
-		var currLineItem chequeItem
+		var currLineItem ChequeItem
 
 		if td.Type == html.ElementNode && len(td.Attr) > 0 && strings.Contains(td.Attr[0].Val, "no-break") {
 			currLineItem.Title = td.FirstChild.Data

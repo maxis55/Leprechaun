@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-func getHtml(url string) (result string, error error) {
+func GetHtml(url string) (result string, error error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	req.Header.Add("User-Agent", `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.27 Safari/537.36`)
