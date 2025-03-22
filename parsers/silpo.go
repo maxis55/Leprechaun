@@ -90,7 +90,7 @@ func ParseSilpoChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 			return nil
 		}
 		//fmt.Printf("NodeType=%s Data=%s Attrs=%s\n", nodeTypeAsString(n.Type), n.Data, n.Attr)
-		if n.Type == html.ElementNode && n.Data == "table" && len(n.Attr) > 0 && n.Attr[0].Val == "cheque-goods" {
+		if n.Type == html.ElementNode && n.Data == "table" && len(n.Attr) > 0 && strings.Contains(n.Attr[0].Val, "cheque-goods") {
 			var err error
 			chequeItems, err = getSilpoChequeItems(n)
 
@@ -99,14 +99,14 @@ func ParseSilpoChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 			}
 		}
 
-		if n.Type == html.ElementNode && n.Data == "div" && len(n.Attr) > 0 && strings.Contains(n.Attr[0].Val, "device-info-line") {
+		if n.Type == html.ElementNode && n.Data == "td" && len(n.Attr) > 0 && strings.Contains(n.Attr[0].Val, "device-info-line") {
 			var err error
-			divWTitle := n.FirstChild.NextSibling
+			tdWTitle := n
 			//if column says that it contains time(and date)
-			if strings.Contains(divWTitle.FirstChild.Data, "ЧАС") {
+			if strings.Contains(tdWTitle.FirstChild.Data, "ЧАС") {
 				//"9/30/2023 14:54:08" export format
 				//"16:59:18 10.03.2024" import format
-				dateTime, err = time.Parse("15:04:05 02.01.2006", divWTitle.NextSibling.NextSibling.FirstChild.Data)
+				dateTime, err = time.Parse("15:04:05 02.01.2006", tdWTitle.NextSibling.NextSibling.FirstChild.Data)
 				if err != nil {
 					return fmt.Errorf("getting timestamp error: %v", err)
 				}
@@ -136,64 +136,96 @@ func ParseSilpoChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 func getSilpoChequeItems(table *html.Node) ([]ChequeItem, error) {
 	var lineItems []ChequeItem
 
-	tr := table.FirstChild.FirstChild
+	tBody := table.FirstChild
 
 	for i := 0; ; i++ {
+		if tBody == nil || tBody.Data != "tbody" {
+			break
+		}
+
+		//fmt.Printf("tbody NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(tBody.Type), tBody.Data, tBody.Attr, i)
+
+		tr := tBody.FirstChild
+
 		if tr == nil {
 			break
 		}
-		//fmt.Printf("NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(tr.Type), tr.Data, tr.Attr, i)
+
+		//fmt.Printf("tr NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(tr.Type), tr.Data, tr.Attr, i)
+
 		if i > 200 {
 			return nil, fmt.Errorf("got stuck in infinite loop when getting cheque items")
 		}
+
 		//sometimes there are empty textNodes instead of trs because of Go's broken html parsing
 		if tr.FirstChild == nil {
+			//fmt.Printf("tr next sibling because of no children NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(tr.NextSibling.Type), tr.NextSibling.Data, tr.NextSibling.Attr, i)
 			tr = tr.NextSibling
 			continue
 		}
 
-		td := tr.FirstChild.NextSibling
+		titleTd := tr.FirstChild
 
 		//sometimes there are rows with just 1 td title, usually related to alcohol or specialized items
 		//they have a product code, it is not useful
-		if td == nil {
+		if titleTd == nil {
+			//fmt.Printf("tr next sibling because of no td NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(tr.NextSibling.Type), tr.NextSibling.Data, tr.NextSibling.Attr, i)
 			tr = tr.NextSibling
 			continue
 		}
-		//fmt.Printf("NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(td.Type), td.Data, td.Attr, i)
+		//fmt.Printf("td NodeType=%s Data=%s Attrs=%s i=%d\n", nodeTypeAsString(titleTd.Type), titleTd.Data, titleTd.Attr, i)
 		var currLineItem ChequeItem
 
-		if td.Type == html.ElementNode && len(td.Attr) > 0 && strings.Contains(td.Attr[0].Val, "no-break") {
-			currLineItem.Title = td.FirstChild.Data
+		if !strings.Contains(titleTd.Attr[0].Val, "no-break") {
+			//skip tr->td with item id, its irrelevant
+			tr = tr.NextSibling
+			titleTd = tr.FirstChild
+		}
 
-			//tr, text node, td --> textNode(title), text node, td --> textNode(price)
-			if td.NextSibling != nil && td.NextSibling.NextSibling != nil {
-				tdPrice := td.NextSibling.NextSibling.FirstChild
-				price, err := strconv.ParseFloat(tdPrice.Data, 32)
+		if titleTd.Type == html.ElementNode && len(titleTd.Attr) > 0 && strings.Contains(titleTd.Attr[0].Val, "no-break") {
+			if titleTd.NextSibling == nil {
+				currLineItem.Title = titleTd.FirstChild.Data // Мол850СелМік3,4-3,8%
+				priceTextTd := tr.NextSibling.FirstChild     // 2 X 55.49
+				currLineItem.Title += " " + priceTextTd.FirstChild.Data
+
+				//there is text node in-between, so need to skip 1
+				priceTd := priceTextTd.NextSibling.NextSibling
+
+				price, err := parsePrice(priceTd.FirstChild.Data) //110.98
+
 				if err != nil {
-					return nil, fmt.Errorf("parsing float in the first tr: %v %s", err, tdPrice.Data)
+					return nil, fmt.Errorf("parsing price error in double td: %v\n", err)
 				}
-				currLineItem.Price = float32(price)
+				currLineItem.Price = price
+
 			} else {
-				//tr, text node, td, textNode(title)
-				//tr, text node, td --> textNode(price explained), textNode, td --> textNode(price)
-				td = tr.NextSibling.FirstChild.NextSibling
-				currLineItem.Title += " " + td.FirstChild.Data
-				tdPrice := td.NextSibling.NextSibling.FirstChild
+				currLineItem.Title = titleTd.FirstChild.Data
 
-				price, err := strconv.ParseFloat(tdPrice.Data, 32)
+				//there is text node in-between, so need to skip 1
+				priceTd := titleTd.NextSibling.NextSibling
+
+				price, err := parsePrice(priceTd.FirstChild.Data)
 				if err != nil {
-					return nil, fmt.Errorf("parsing float in the next tr: %v %s", err, tdPrice.Data)
+					return nil, fmt.Errorf("parsing price error in single td: %v", err)
 				}
-				currLineItem.Price = float32(price)
-				tr = tr.NextSibling
+				currLineItem.Price = price
 			}
+
 			lineItems = append(lineItems, currLineItem)
 		}
 
-		tr = tr.NextSibling
+		tBody = tBody.NextSibling
 	}
 	return lineItems, nil
+}
+
+func parsePrice(data string) (float32, error) {
+	price, err := strconv.ParseFloat(data, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing float in the first tr: %v %s", err, data)
+	}
+
+	return float32(price), nil
 }
 
 //reference cheque
