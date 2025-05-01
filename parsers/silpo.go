@@ -182,7 +182,7 @@ func getSilpoChequeItems(table *html.Node) ([]ChequeItem, error) {
 			titleTd = tr.FirstChild
 		}
 
-		if titleTd.Type == html.ElementNode && len(titleTd.Attr) > 0 && strings.Contains(titleTd.Attr[0].Val, "no-break") {
+		if titleTd.Type == html.ElementNode && len(titleTd.Attr) > 0 && strings.Contains(titleTd.Attr[0].Val, "no-break") && !strings.Contains(titleTd.FirstChild.Data, "уцінка") {
 			if titleTd.NextSibling == nil {
 				currLineItem.Title = titleTd.FirstChild.Data // Мол850СелМік3,4-3,8%
 				priceTextTd := tr.NextSibling.FirstChild     // 2 X 55.49
