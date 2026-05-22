@@ -1,0 +1,10 @@
+services:
+  leprechaun:
+    build: .
+    image: leprechaun:local
+    container_name: leprechaun
+    restart: unless-stopped
+    # Env vars are not listed here on purpose — set them in Portainer's
+    # "Environment variables" UI when deploying the stack, or via
+    # `docker compose --env-file .env up -d` locally. The bot validates that
+    # every required key is set+non-empty at startup and exits 1 if not.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 )
 
 var Token string
@@ -31,10 +32,10 @@ func Run() {
 	discord.Open()
 	defer discord.Close() // close session, after function termination
 
-	// keep bot running untill there is NO os interruption (ctrl + C)
+	// Block until interrupt (Ctrl+C, local) or SIGTERM (docker/portainer stop).
 	fmt.Println("Bot running....")
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
 }

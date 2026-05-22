@@ -1,0 +1,10 @@
+.env
+.env.*
+.git
+.gitignore
+.idea
+.scratch
+.dockerignore
+Dockerfile
+readme.md
+CLAUDE.md
