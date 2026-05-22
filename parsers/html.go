@@ -5,6 +5,7 @@ import (
 	"golang.org/x/net/html"
 	"io"
 	"net/http"
+	"strconv"
 )
 
 func GetHtml(url string) (result string, error error) {
@@ -28,6 +29,15 @@ func GetHtml(url string) (result string, error error) {
 	}
 
 	return string(bytes), nil
+}
+
+func parsePrice(data string) (float32, error) {
+	price, err := strconv.ParseFloat(data, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing float: %v %s", err, data)
+	}
+
+	return float32(price), nil
 }
 
 func nodeTypeAsString(nodeType html.NodeType) string {

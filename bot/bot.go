@@ -65,6 +65,16 @@ func newMessage(discord *discordgo.Session, message *discordgo.MessageCreate) {
 				discord.ChannelMessageSend(message.ChannelID, res)
 			}
 		}()
+	case strings.Contains(message.Content, "ecom-gateway.varus.ua"):
+		discord.ChannelMessageSend(message.ChannelID, "Parsing")
+		go func() {
+			res, err := processing.ParseVarusLink(strings.Replace(message.Content, "!parseVarus ", "", 1))
+			if err != nil {
+				discord.ChannelMessageSend(message.ChannelID, err.Error())
+			} else {
+				discord.ChannelMessageSend(message.ChannelID, res)
+			}
+		}()
 	}
 
 }

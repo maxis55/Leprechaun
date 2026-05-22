@@ -3,7 +3,6 @@ package parsers
 import (
 	"fmt"
 	"golang.org/x/net/html"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -219,14 +218,6 @@ func getSilpoChequeItems(table *html.Node) ([]ChequeItem, error) {
 	return lineItems, nil
 }
 
-func parsePrice(data string) (float32, error) {
-	price, err := strconv.ParseFloat(data, 32)
-	if err != nil {
-		return 0, fmt.Errorf("parsing float in the first tr: %v %s", err, data)
-	}
-
-	return float32(price), nil
-}
 
 //reference cheque
 
