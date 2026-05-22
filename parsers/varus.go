@@ -2,87 +2,68 @@ package parsers
 
 import (
 	"fmt"
-	"golang.org/x/net/html"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 // Varus receipt structure (relevant parts):
 //
 //   <div id="bot"><div id="table"><table>
-//     <tr class="tabletitle">...</tr>        (skipped — header)
-//     <tr class="service">                   (one per item)
+//     <tr class="tabletitle">...</tr>        (header, skipped — selector targets tr.service only)
+//     <tr class="service">
 //       <td class="item">
-//         <p class="itemtext"><span>Штрих код 4820...</span></p>
+//         <p class="itemtext"><span>Штрих код 4820...</span></p>   (barcode, skipped)
 //         <p class="itemtext">Title text</p>
+//         <p class="itemtext">Знижка</p>                            (only on discounted items, skipped)
 //       </td>
-//       <td class="tableitem" ...>           (quantity)
+//       <td class="tableitem" ...>            (quantity, e.g. "1.000" / "0.274")
 //         <p class="itemtext">1.000</p>
 //       </td>
-//       <td class="tableitem" ...>           (line total + tax letter, e.g. "79.90   А")
-//         <p class="itemtext">79.90   А</p>
+//       <td class="tableitem" ...>            (price)
+//         <p class="itemtext">79.90   А</p>   (gross, kept; trailing tax letter stripped)
+//         <p class="itemtext">0.59   А</p>    (discount amount, present only on discounted items, skipped)
 //       </td>
 //     </tr>
-//     ...
 //   </table></div>
 //
-// Timestamp lives later in the document:
+// Timestamp:
 //   <p class="fscl-info-bot">01.05.2026 19:33</p>
 
 // "01.05.2026 19:33"
 var varusDateTimeRe = regexp.MustCompile(`^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$`)
 
 // "79.90   А" -> "79.90"
-var varusPriceRe = regexp.MustCompile(`[\d]+\.[\d]+`)
+var varusPriceRe = regexp.MustCompile(`\d+\.\d+`)
 
 func ParseVarusChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
-	root, err := html.Parse(strings.NewReader(htm))
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htm))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("html parse: %v", err)
 	}
 
 	var items []ChequeItem
-	var dateTime time.Time
-
-	var walk func(*html.Node) error
-	walk = func(n *html.Node) error {
-		if n.Type == html.ElementNode && n.Data == "tr" && hasClass(n, "service") {
-			item, err := parseVarusItemRow(n)
-			if err != nil {
-				return fmt.Errorf("item row: %v", err)
-			}
-			items = append(items, item)
-			return nil
+	var rowErr error
+	doc.Find("tr.service").EachWithBreak(func(_ int, tr *goquery.Selection) bool {
+		item, err := parseVarusItemRow(tr)
+		if err != nil {
+			rowErr = fmt.Errorf("item row: %v", err)
+			return false
 		}
-
-		if dateTime.IsZero() && n.Type == html.ElementNode && n.Data == "p" && hasClass(n, "fscl-info-bot") {
-			text := strings.TrimSpace(textContent(n))
-			if varusDateTimeRe.MatchString(text) {
-				t, err := time.Parse("02.01.2006 15:04", text)
-				if err != nil {
-					return fmt.Errorf("timestamp parse: %v", err)
-				}
-				dateTime = t
-				return nil
-			}
-		}
-
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			if err := walk(c); err != nil {
-				return err
-			}
-		}
-		return nil
+		items = append(items, item)
+		return true
+	})
+	if rowErr != nil {
+		return nil, time.Time{}, rowErr
 	}
 
-	if err := walk(root); err != nil {
-		return nil, dateTime, err
+	dateTime, err := parseVarusTimestamp(doc)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
 
-	if dateTime.IsZero() {
-		return nil, dateTime, fmt.Errorf("no receipt timestamp found")
-	}
 	if len(items) == 0 {
 		return nil, dateTime, fmt.Errorf("no items found")
 	}
@@ -90,39 +71,46 @@ func ParseVarusChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 	return items, dateTime, nil
 }
 
-func parseVarusItemRow(tr *html.Node) (ChequeItem, error) {
+func parseVarusItemRow(tr *goquery.Selection) (ChequeItem, error) {
 	var item ChequeItem
 
-	tds := childrenByTag(tr, "td")
-	if len(tds) < 3 {
-		return item, fmt.Errorf("expected >=3 <td>, got %d", len(tds))
+	tds := tr.ChildrenFiltered("td")
+	if tds.Length() < 3 {
+		return item, fmt.Errorf("expected >=3 <td>, got %d", tds.Length())
 	}
 
-	// Title cell contains, in order: a barcode <p> (with <span> child), the title <p>,
-	// and optionally a "Знижка" (discount) <p>. The price cell mirrors this: the first
-	// numeric line is the gross price, the second is the discount amount.
-	// We record the gross price and ignore the discount.
-	title, err := varusItemTitle(tds[0])
-	if err != nil {
-		return item, err
+	// Title: first <p class="itemtext"> in the item cell that has no child elements
+	// (barcode paragraphs wrap their text in a <span>) and isn't "Знижка".
+	titleCell := tds.Eq(0)
+	title := ""
+	titleCell.ChildrenFiltered("p.itemtext").EachWithBreak(func(_ int, p *goquery.Selection) bool {
+		if p.Children().Length() > 0 {
+			return true
+		}
+		t := strings.TrimSpace(p.Text())
+		if t == "" || t == "Знижка" {
+			return true
+		}
+		title = t
+		return false
+	})
+	if title == "" {
+		return item, fmt.Errorf("no title in item cell")
 	}
 
-	// Quantity (К-сть): single decimal in the middle cell, e.g. "1.000" or "0.274".
-	// Append non-unit quantities to the title in-line — matches the Silpo convention
-	// where "2 X 55.49" gets concatenated onto the title field.
-	qty := firstNonEmptyItemText(tds[1])
+	// Quantity (К-сть): first non-empty <p class="itemtext"> in the middle cell.
+	// Mirrors the Silpo convention of appending the quantity string to the title in-line.
+	qty := strings.TrimSpace(tds.Eq(1).ChildrenFiltered("p.itemtext").First().Text())
 	if qty != "" && qty != "1.000" {
 		title = title + " " + qty
 	}
 	item.Title = title
 
-	priceTexts := itemTextParagraphs(tds[len(tds)-1])
-	if len(priceTexts) == 0 {
-		return item, fmt.Errorf("no price paragraphs in item row")
-	}
-	match := varusPriceRe.FindString(priceTexts[0])
+	// Price: first <p class="itemtext"> in the last cell; second (if any) is the discount, ignored.
+	priceText := strings.TrimSpace(tds.Eq(tds.Length() - 1).ChildrenFiltered("p.itemtext").First().Text())
+	match := varusPriceRe.FindString(priceText)
 	if match == "" {
-		return item, fmt.Errorf("no numeric price in %q", priceTexts[0])
+		return item, fmt.Errorf("no numeric price in %q", priceText)
 	}
 	price, err := parsePrice(match)
 	if err != nil {
@@ -133,102 +121,22 @@ func parseVarusItemRow(tr *html.Node) (ChequeItem, error) {
 	return item, nil
 }
 
-func firstNonEmptyItemText(td *html.Node) string {
-	for _, t := range itemTextParagraphs(td) {
-		if s := strings.TrimSpace(t); s != "" {
-			return s
+func parseVarusTimestamp(doc *goquery.Document) (time.Time, error) {
+	var dateTime time.Time
+	doc.Find("p.fscl-info-bot").EachWithBreak(func(_ int, p *goquery.Selection) bool {
+		text := strings.TrimSpace(p.Text())
+		if !varusDateTimeRe.MatchString(text) {
+			return true
 		}
+		t, err := time.Parse("02.01.2006 15:04", text)
+		if err != nil {
+			return true
+		}
+		dateTime = t
+		return false
+	})
+	if dateTime.IsZero() {
+		return dateTime, fmt.Errorf("no receipt timestamp found")
 	}
-	return ""
-}
-
-// varusItemTitle picks the human title out of the first <td> of an item row.
-// It skips the barcode paragraph (the one containing a <span>) and the trailing
-// "Знижка" paragraph if present.
-func varusItemTitle(td *html.Node) (string, error) {
-	var candidates []string
-	for c := td.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type != html.ElementNode || c.Data != "p" || !hasClass(c, "itemtext") {
-			continue
-		}
-		// Skip the barcode paragraph (its content is wrapped in a <span>).
-		if firstElementChild(c) != nil {
-			continue
-		}
-		text := strings.TrimSpace(textContent(c))
-		if text == "" {
-			continue
-		}
-		if text == "Знижка" {
-			continue
-		}
-		candidates = append(candidates, text)
-	}
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no title paragraph in item cell")
-	}
-	// If the cell ever carries multiple non-barcode, non-discount paragraphs,
-	// the first one is the product title; later ones are extra notes we don't model.
-	return candidates[0], nil
-}
-
-func firstElementChild(n *html.Node) *html.Node {
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.ElementNode {
-			return c
-		}
-	}
-	return nil
-}
-
-func hasClass(n *html.Node, class string) bool {
-	for _, a := range n.Attr {
-		if a.Key == "class" {
-			for _, c := range strings.Fields(a.Val) {
-				if c == class {
-					return true
-				}
-			}
-			return false
-		}
-	}
-	return false
-}
-
-func childrenByTag(n *html.Node, tag string) []*html.Node {
-	var out []*html.Node
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.ElementNode && c.Data == tag {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// itemTextParagraphs collects the text of every <p class="itemtext"> directly under n.
-// Bare <span> children inside those <p>s are flattened into the text.
-func itemTextParagraphs(n *html.Node) []string {
-	var out []string
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.ElementNode && c.Data == "p" && hasClass(c, "itemtext") {
-			out = append(out, textContent(c))
-		}
-	}
-	return out
-}
-
-func textContent(n *html.Node) string {
-	var sb strings.Builder
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.TextNode {
-			sb.WriteString(n.Data)
-			return
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(n)
-	return sb.String()
+	return dateTime, nil
 }

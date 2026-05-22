@@ -2,7 +2,6 @@ package parsers
 
 import (
 	"fmt"
-	"golang.org/x/net/html"
 	"io"
 	"net/http"
 	"strconv"
@@ -40,20 +39,3 @@ func parsePrice(data string) (float32, error) {
 	return float32(price), nil
 }
 
-func nodeTypeAsString(nodeType html.NodeType) string {
-	switch nodeType {
-	case html.ErrorNode:
-		return "ErrorNode"
-	case html.TextNode:
-		return "TextNode"
-	case html.DocumentNode:
-		return "DocumentNode"
-	case html.ElementNode:
-		return "ElementNode"
-	case html.CommentNode:
-		return "CommentNode"
-	case html.DoctypeNode:
-		return "DoctypeNode"
-	}
-	return "UNKNOWN"
-}
