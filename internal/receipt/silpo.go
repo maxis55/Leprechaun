@@ -1,4 +1,4 @@
-package parsers
+package receipt
 
 import (
 	"fmt"
@@ -7,12 +7,6 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 )
-
-type ChequeItem struct {
-	Title    string
-	Price    float32
-	Category string
-}
 
 // Silpo cheque structure (current as of May 2026):
 //
@@ -48,7 +42,9 @@ type ChequeItem struct {
 //     </table>
 //   </div>
 
-func ParseSilpoChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
+// ParseSilpo extracts items and the receipt timestamp from a Silpo cheque HTML
+// document. Conforms to the Parser type so it can be passed to Process.
+func ParseSilpo(htm string) ([]Item, time.Time, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htm))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("html parse: %v", err)
@@ -59,16 +55,15 @@ func ParseSilpoChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 		return nil, time.Time{}, err
 	}
 
-	dateTime, err := parseSilpoTimestamp(doc)
+	t, err := parseSilpoTimestamp(doc)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-
-	return items, dateTime, nil
+	return items, t, nil
 }
 
-func parseSilpoItems(doc *goquery.Document) ([]ChequeItem, error) {
-	var items []ChequeItem
+func parseSilpoItems(doc *goquery.Document) ([]Item, error) {
+	var items []Item
 	var firstErr error
 
 	doc.Find("table.cheque-goods > tbody").EachWithBreak(func(_ int, tb *goquery.Selection) bool {
@@ -90,8 +85,7 @@ func parseSilpoItems(doc *goquery.Document) ([]ChequeItem, error) {
 			return true
 		}
 
-		var item ChequeItem
-		item.Title = titleText
+		item := Item{Title: titleText}
 
 		// 2-row shape: title cell has sibling <td>s in the same row with the price.
 		// 3-row shape: title row has only one <td>; the next <tr> carries "qty X unitprice"
@@ -114,7 +108,7 @@ func parseSilpoItems(doc *goquery.Document) ([]ChequeItem, error) {
 		}
 		price, err := parsePrice(strings.TrimSpace(priceCell.Text()))
 		if err != nil {
-			firstErr = fmt.Errorf("parsing price for %q: %v", item.Title, err)
+			firstErr = fmt.Errorf("price for %q: %v", item.Title, err)
 			return false
 		}
 		item.Price = price

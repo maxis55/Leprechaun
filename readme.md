@@ -139,22 +139,25 @@ Submitted 7 items, total cost is 1684.00, timestamp is 31/12/2023 14:41:35
 ## Layout
 
 ```
-main.go              loads .env, starts the bot
-bot/bot.go           Discord session + message router
-processing/          orchestrates fetch -> parse -> submit (one func per chain)
-parsers/html.go      generic HTTP GET with a browser User-Agent + shared parsePrice
-parsers/silpo.go     Silpo cheque parser (goquery selectors)
-parsers/varus.go     Varus cheque parser (goquery selectors)
-submitting/google.go fires one POST per item to the Google Form
+main.go                                  loads .env, validates env, starts the bot
+internal/discord/bot.go                  Discord session + message router + retailer dispatch
+internal/receipt/receipt.go              Item type, parser interface, Process orchestrator
+internal/receipt/silpo.go                Silpo cheque parser (goquery)
+internal/receipt/varus.go                Varus cheque parser (goquery)
+internal/receipt/parsers_test.go         smoke tests
+internal/receipt/testdata/*.html         redacted fixture receipts
+internal/receipt/testdata/redact/        PII stripper for new fixtures
+internal/form/google.go                  Google Form POST loop
+internal/httpx/httpx.go                  HTTP GET with browser User-Agent
 ```
+
+Tests: `go test ./...`. Logs are JSON to stderr via `log/slog`; set `LOG_LEVEL=debug|info|warn|error` to change verbosity (default INFO).
 
 ## Known limitations
 
-- `checkNilErr` (in `bot/bot.go`) calls `log.Fatal("Error message")` and throws away the real error. Real errors from `discordgo.New` will be hard to diagnose.
-- `discord.Open()`'s error is ignored, so an invalid `DISCORD_KEY` causes a silent no-op rather than a crash.
-- `parsers.GetHtml` checks `err` from `client.Do` but uses the request even if `http.NewRequest` failed; also sends an ancient Chrome 39 User-Agent that has triggered 403s in the past.
-- Category is a single hardcoded value (`G_FORM_CATEGORY_D_VALUE`); the `Category` field on `ChequeItem` is never populated.
-- The parsers are tied to the current HTML markup of each retailer — there is no schema or contract. Site redesigns will break them.
-- No tests.
-- An in-flight receipt parse is not drained on shutdown; `Ctrl+C` can interrupt mid-submit.
+- `internal/httpx/httpx.go` sends an ancient Chrome 39 User-Agent that has triggered 403s in the past (commit `49f07cd`). Rotate it if a retailer starts blocking.
+- Category is a single hardcoded value (`G_FORM_CATEGORY_D_VALUE`); per-item categorisation isn't modeled.
+- The parsers are tied to the current HTML markup of each retailer — there is no schema or contract. Site redesigns will break them. Smoke tests under `internal/receipt/testdata/` will catch this on the next `go test`.
+- An in-flight receipt parse is not drained on shutdown; SIGTERM (`docker stop` / Portainer stop) can interrupt mid-submit.
 - Each form submission sleeps 100 ms; a 50-item receipt takes ~5 s.
+- Adding new fixtures requires running `go run ./internal/receipt/testdata/redact` to strip PII before committing — see CLAUDE.md for the workflow.

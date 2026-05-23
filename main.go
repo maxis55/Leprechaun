@@ -1,11 +1,11 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/joho/godotenv"
-	"leprechaun/bot"
+	"leprechaun/internal/discord"
 )
 
 // Every env var the app reads. Listed here so missing config fails fast at
@@ -22,11 +22,26 @@ var requiredEnv = []string{
 }
 
 func main() {
+	// JSON to stderr so Portainer / docker logs / a log aggregator can parse fields.
+	// Level defaults to INFO; override with LOG_LEVEL=debug|warn|error to retune
+	// without a redeploy.
+	level := slog.LevelInfo
+	switch os.Getenv("LOG_LEVEL") {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
 	// .env is optional: a missing file is fine when env vars are supplied by
 	// the orchestrator (Portainer, docker run -e, k8s, ...). A malformed file
-	// is still a fatal — we don't want silent typos.
+	// is still fatal — we don't want silent typos.
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
-		log.Fatalf("loading .env: %v", err)
+		slog.Error("loading .env", "err", err)
+		os.Exit(1)
 	}
 
 	var missing []string
@@ -36,11 +51,12 @@ func main() {
 		}
 	}
 	if len(missing) > 0 {
-		log.Fatalf("missing required env vars: %v", missing)
+		slog.Error("missing required env vars", "missing", missing)
+		os.Exit(1)
 	}
 
-	bot.Token = os.Getenv("DISCORD_KEY")
-	bot.Run()
+	discord.Token = os.Getenv("DISCORD_KEY")
+	discord.Run()
 
-	log.Println("Shutting down")
+	slog.Info("shutting down")
 }

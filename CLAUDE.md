@@ -4,39 +4,59 @@ Small personal-use Go (1.25) Discord bot. One purpose: turn a Ukrainian grocery 
 
 Read `readme.md` for the user-facing summary; this file captures what's useful when editing the code.
 
+## Layout
+
+```
+main.go                                  loads .env, validates required env, calls discord.Run
+internal/discord/bot.go                  Discord session + message router + retailer dispatch
+internal/receipt/receipt.go              Item type, Parser type, Process orchestrator, parsePrice
+internal/receipt/silpo.go                Silpo parser (goquery)
+internal/receipt/varus.go                Varus parser (goquery)
+internal/receipt/parsers_test.go         smoke tests for both parsers
+internal/receipt/testdata/*.html         redacted receipt fixtures
+internal/receipt/testdata/redact/main.go PII stripper for new fixtures
+internal/form/google.go                  Google Form POST loop
+internal/httpx/httpx.go                  HTTP GET with browser User-Agent
+```
+
+Packages live under `internal/` so they can't be imported by anything outside this module.
+
 ## Data flow
 
 ```
-Discord message ──► bot/bot.go (newMessage)
-  matches "receipt.silpo"  OR  "ecom-gateway.varus.ua"
+Discord message ──► internal/discord/bot.go (onMessage)
+  url found, u.Host matches a retailer suffix
         │
         ▼
-processing/processor.go (ParseSilpoLink | ParseVarusLink)
+internal/discord/bot.go (handleReceipt) — goroutine, slog.With retailer+url+channel
         │
-        ├─► parsers/html.go (GetHtml)              ── HTTP GET with spoofed Chrome UA
+        ▼
+internal/receipt.Process(url, parser)
         │
-        ├─► parsers/{silpo,varus}.go               ── goquery-based DOM extraction
-        │     returns []ChequeItem + receipt time.Time
+        ├─► internal/httpx.GetHTML            ── HTTP GET with spoofed Chrome UA
         │
-        └─► submitting/google.go (SubmitGoogleForm)
-              one http.PostForm per item, 100 ms apart
+        ├─► receipt.ParseSilpo | ParseVarus   ── goquery-based DOM extraction
+        │     returns []Item + receipt time.Time
+        │
+        └─► internal/form.Submit
+              one http.PostForm per entry, 100 ms apart
               returns a human summary string
         ▼
-bot replies in the same channel
+bot replies in the same channel; structured slog INFO on success, ERROR on failure
 ```
 
-Everything runs in a goroutine spawned per receipt message — `bot/bot.go` `newMessage`. There is no queue, no cancellation, no shutdown drain. Each goroutine swallows its own error into a Discord reply.
+Everything runs in a goroutine spawned per receipt message — `internal/discord/bot.go` `handleReceipt`. There is no queue, no cancellation, no shutdown drain. Errors go to the channel as a short message and to slog with full detail.
 
 ## Entry points
 
-- `main.go` — best-effort `godotenv.Load()` (missing `.env` is fine, malformed `.env` is fatal), then validates every key in `requiredEnv` is set+non-empty before starting the bot. To add a new env var anywhere in the codebase, add it to `requiredEnv` so misconfiguration fails fast instead of producing silent garbage in the Google Form.
-- `bot/bot.go` `Run()` — opens the Discord session, blocks on SIGINT **or SIGTERM** (the latter is what `docker stop` and Portainer's stop button send).
-- `bot/bot.go` `newMessage` — the command router. To add a new retailer, add a `case` here and a `ParseXxxLink` in processing.
-- `processing/processor.go` — one orchestration function per retailer (`ParseSilpoLink`, `ParseVarusLink`). Pattern: `GetHtml → ParseXxxChequeHtml → SubmitGoogleForm`.
+- `main.go` — configures slog (JSON to stderr, level via `LOG_LEVEL=debug|info|warn|error`, default INFO). Best-effort `godotenv.Load()` (missing `.env` is fine, malformed `.env` is fatal). Then validates every key in `requiredEnv` is set+non-empty before starting the bot. To add a new env var anywhere in the codebase, add it to `requiredEnv` so misconfiguration fails fast instead of producing silent garbage in the Google Form.
+- `internal/discord/bot.go` `Run()` — opens the Discord session, blocks on SIGINT **or SIGTERM** (the latter is what `docker stop` and Portainer's stop button send). Errors from `discordgo.New` and `session.Open` exit the process so Portainer's restart loop kicks in instead of running a healthy-looking but inert container.
+- `internal/discord/bot.go` `onMessage` — the command router. Extracts the first URL from the message body, dispatches by `u.Host` against the `retailers` table. To add a new retailer, register it in `retailers` and add the parser in `internal/receipt`.
+- `internal/receipt/receipt.go` `Process(url, parser)` — the orchestrator: fetch → parse → submit. One function used by both retailers.
 
 ## Parser conventions
 
-Both parsers are written with `github.com/PuerkitoBio/goquery` (jQuery-style CSS selectors over `golang.org/x/net/html`). They share `ChequeItem` (defined in `parsers/silpo.go`) and `parsePrice` (in `parsers/html.go`).
+Both parsers are written with `github.com/PuerkitoBio/goquery` (jQuery-style CSS selectors over `golang.org/x/net/html`). They share `Item` and `parsePrice`, both defined in `internal/receipt/receipt.go`.
 
 Output convention: weighed and multi-unit quantities are **appended to the title** in the same string field, separated by a space. There is no quantity column on the form. `Submit` only reads `Title` and `Price`. Examples:
 - `"Балик ІНДИЧИЙ к/в Саяйвір ваг 0.192"` (Varus weighed)
@@ -45,7 +65,7 @@ Output convention: weighed and multi-unit quantities are **appended to the title
 
 Discounts are intentionally dropped: the gross (pre-discount) price is recorded. This matches the project's existing policy (commit `f82c566` "Ignore discount").
 
-### Silpo (`parsers/silpo.go`)
+### Silpo (`internal/receipt/silpo.go`)
 
 - Items live under `table.cheque-goods > tbody`, one item per `<tbody>`.
 - The title row is identified as **the first `<tr>` whose first `<td>` has class `no-break`** — *not* a fixed index. Alcohol and other excise items prepend extra `<tr>`s containing a UKT-ZED code and an internal product code; the `no-break` scan skips them. A code comment in `parseSilpoItems` flags this — do not replace the scan with positional indexing or alcohol parsing will silently break.
@@ -56,7 +76,7 @@ Discounts are intentionally dropped: the gross (pre-discount) price is recorded.
 - Timestamp: `.device-info-line-item` cell containing `"ЧАС"`, value in the immediate next sibling, format `"15:04:05 02.01.2006"`.
 - A historical reference cheque used to live in a block comment in this file. It was stale (used `<div>` for the device-info block where current Silpo uses `<td>`) and was removed in the goquery migration; saved fixtures under `.scratch/` (gitignored) are the new source of truth.
 
-### Varus (`parsers/varus.go`)
+### Varus (`internal/receipt/varus.go`)
 
 - Items live under `tr.service`.
 - Title cell contains, in order: a barcode `<p>` (wraps a `<span>` — skipped by checking `p.Children().Length() > 0`), the title `<p>`, and optionally a `Знижка` `<p>` on discounted items (skipped by exact text match).
@@ -64,22 +84,27 @@ Discounts are intentionally dropped: the gross (pre-discount) price is recorded.
 - Price cell: first `<p class="itemtext">` is the gross line total (e.g. `"79.90   А"` — trailing tax letter stripped via regex `\d+\.\d+`). Second `<p>` (if present) is the discount amount and is ignored.
 - Timestamp: `p.fscl-info-bot` whose text matches `^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$`, format `"02.01.2006 15:04"` (no seconds — unlike Silpo).
 
-## Google Form submission (submitting/google.go)
+## Google Form submission (`internal/form/google.go`)
 
-- One `http.PostForm` per item, with a `100 * time.Millisecond` sleep between calls ("dont overwhelm google"). Don't remove the sleep without testing — Google has rate-limited bulk submissions in the past.
+- One `http.PostForm` per entry, with a `100 * time.Millisecond` sleep between calls (constant `submitPause`). Don't remove the sleep without testing — Google has rate-limited bulk submissions in the past.
 - Timestamp is sent as five fields (`_year`, `_month`, `_day`, `_hour`, `_minute`) appended to the base entry id. A commented-out single-field form is left for reference if the form is reconfigured.
-- `ChequeItem.Category` is never set; the form gets a fixed `G_FORM_CATEGORY_D_VALUE`.
-- Any non-200 from Google aborts the whole receipt; already-submitted items are not rolled back.
+- Category is the fixed value of `G_FORM_CATEGORY_D_VALUE`; per-item categorisation is not modeled.
+- Any non-200 from Google aborts the whole receipt; already-submitted entries are not rolled back.
+- `form.Entry` is a deliberate boundary type so `form/` doesn't import `receipt/` and vice versa; the orchestrator in `receipt.Process` converts between the two.
+
+## Testing
+
+- `internal/receipt/parsers_test.go` covers both parsers against redacted fixtures.
+- Fixtures live in `internal/receipt/testdata/`. Filename prefix determines retailer: `silpo_*.html` or `varus_*.html`. New fixtures are picked up automatically by the redactor.
+- `internal/receipt/testdata/redact/main.go` is the PII stripper. **Always run it before committing a new fixture** — raw e-receipts contain card PAN, RRN, terminal IDs, auth codes, loyalty numbers, cashier names, etc. Workflow: `curl … -o internal/receipt/testdata/<retailer>_<name>.html && go run ./internal/receipt/testdata/redact`. The tool is idempotent.
+- The price assertions allow ~1¢ slack because we sum `float32` line items.
 
 ## Known sharp edges
 
 These are listed for awareness — don't fix them as part of an unrelated change without asking.
 
-- `bot/bot.go` `checkNilErr` discards the real error and `log.Fatal`s a literal `"Error message"`.
-- `bot/bot.go` `discord.Open()` error is ignored. Particularly painful under Portainer/Docker: a revoked or wrong `DISCORD_KEY` produces a healthy-looking container that logs `Bot running....` and silently does nothing.
-- `parsers/html.go` `GetHtml` uses `req` even if `http.NewRequest` returned an error (`err` is overwritten by `client.Do`).
-- Hardcoded `User-Agent` is ancient (Chrome 39). Some sites block on UA; if Silpo starts 403'ing again (see commit `49f07cd`), rotate this.
-- No tests, no linter config, no CI. The `.scratch/` directory is the de-facto fixture store for manual verification.
+- Hardcoded `User-Agent` in `internal/httpx/httpx.go` is ancient (Chrome 39). Some sites block on UA; if Silpo starts 403'ing again (see commit `49f07cd`), rotate this.
+- No linter config, no CI. Tests exist (`go test ./...`) but aren't automated.
 
 ## Conventions to follow when editing
 

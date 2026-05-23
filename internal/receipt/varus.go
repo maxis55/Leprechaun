@@ -1,4 +1,4 @@
-package parsers
+package receipt
 
 import (
 	"fmt"
@@ -38,13 +38,15 @@ var varusDateTimeRe = regexp.MustCompile(`^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$`)
 // "79.90   А" -> "79.90"
 var varusPriceRe = regexp.MustCompile(`\d+\.\d+`)
 
-func ParseVarusChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
+// ParseVarus extracts items and the receipt timestamp from a Varus cheque HTML
+// document. Conforms to the Parser type so it can be passed to Process.
+func ParseVarus(htm string) ([]Item, time.Time, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htm))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("html parse: %v", err)
 	}
 
-	var items []ChequeItem
+	var items []Item
 	var rowErr error
 	doc.Find("tr.service").EachWithBreak(func(_ int, tr *goquery.Selection) bool {
 		item, err := parseVarusItemRow(tr)
@@ -59,20 +61,19 @@ func ParseVarusChequeHtml(htm string) ([]ChequeItem, time.Time, error) {
 		return nil, time.Time{}, rowErr
 	}
 
-	dateTime, err := parseVarusTimestamp(doc)
+	t, err := parseVarusTimestamp(doc)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 
 	if len(items) == 0 {
-		return nil, dateTime, fmt.Errorf("no items found")
+		return nil, t, fmt.Errorf("no items found")
 	}
-
-	return items, dateTime, nil
+	return items, t, nil
 }
 
-func parseVarusItemRow(tr *goquery.Selection) (ChequeItem, error) {
-	var item ChequeItem
+func parseVarusItemRow(tr *goquery.Selection) (Item, error) {
+	var item Item
 
 	tds := tr.ChildrenFiltered("td")
 	if tds.Length() < 3 {
@@ -117,7 +118,6 @@ func parseVarusItemRow(tr *goquery.Selection) (ChequeItem, error) {
 		return item, err
 	}
 	item.Price = price
-
 	return item, nil
 }
 
