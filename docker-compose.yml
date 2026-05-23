@@ -4,6 +4,8 @@ services:
     image: leprechaun:local
     container_name: leprechaun
     restart: unless-stopped
+    env_file:
+      - stack.env
     # Env vars are not listed here on purpose — set them in Portainer's
     # "Environment variables" UI when deploying the stack, or via
     # `docker compose --env-file .env up -d` locally. The bot validates that
